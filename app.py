@@ -42,12 +42,18 @@ def load_and_fix_data(sheet_id):
         
         # --- RÉPARATION DE L'ERREUR 'AMBIGUOUS' ---
         header_idx = 0
+        found_header = False
         for i, row in df_raw.iterrows():
-            # Correction : on teste chaque cellule individuellement avec any()
-            if any("commune" in str(v).lower() for v in row):
+            # Correction : on teste chaque cellule individuellement
+            # On utilise une compréhension de liste avec any() pour éviter l'ambiguïté
+            if any("commune" in str(v).lower() for v in row.values):
                 header_idx = i
+                found_header = True
                 break
         
+        if not found_header:
+            continue
+
         # Reconstruction des noms de colonnes (Gestion des cellules fusionnées)
         h1 = df_raw.iloc[header_idx]
         h2 = df_raw.iloc[header_idx + 1] if (header_idx + 1) < len(df_raw) else h1
@@ -83,7 +89,7 @@ SHEET_ID = "1fVb91z5B-nqOwCCPO5rMK-u9wd2KxDG56FteMaCr63w"
 try:
     data_dict = load_and_fix_data(SHEET_ID)
 except Exception as e:
-    st.error(f"Erreur technique : {e}")
+    st.error(f"Erreur technique lors du chargement : {e}")
     st.stop()
 
 with st.sidebar:
