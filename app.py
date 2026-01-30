@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Style CSS personnalisé pour un look "Entreprise"
+# Style CSS pour un look professionnel
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -25,7 +25,6 @@ st.markdown("""
         border: 1px solid #eef0f2;
     }
     div[data-testid="stSidebar"] { background-color: #1e293b; color: white; }
-    .stButton>button { border-radius: 8px; width: 100%; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,14 +41,14 @@ def load_all_data(sheet_id):
         df_raw = pd.DataFrame(ws.get_all_values())
         if df_raw.empty: continue
 
-        # Détection automatique de l'en-tête
+        # Détection de l'en-tête (cherche la ligne contenant 'Commune')
         header_idx = 0
         for i, row in df_raw.iterrows():
             if "commune" in str(row.values).lower():
                 header_idx = i
                 break
         
-        # Nettoyage des colonnes (fusion des lignes d'en-tête)
+        # Fusion des en-têtes (Ligne titre + Ligne unité)
         h1 = df_raw.iloc[header_idx]
         h2 = df_raw.iloc[header_idx + 1] if (header_idx + 1) < len(df_raw) else h1
         
@@ -64,98 +63,79 @@ def load_all_data(sheet_id):
         df = df_raw.iloc[header_idx+2:].copy()
         df.columns = new_cols
         
-        # Conversion numérique automatique
+        # --- CORRECTION ICI : Conversion numérique colonne par colonne ---
         for col in df.columns:
             if "Commune" not in col:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.replace(r'\s+', '', regex=True), errors='ignore')
+                # On nettoie les espaces et remplace les virgules par des points
+                df[col] = (df[col].astype(str)
+                           .str.replace(r'\s+', '', regex=True)
+                           .str.replace(',', '.')
+                           .replace('', '0'))
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         all_sheets[ws.title] = df.dropna(subset=[df.columns[0]])
     return all_sheets
 
-# --- 3. LOGIQUE SIDEBAR ---
+# --- 3. INITIALISATION ---
 SHEET_ID = "1fVb91z5B-nqOwCCPO5rMK-u9wd2KxDG56FteMaCr63w"
-
-with st.sidebar:
-    st.image("https://www.svgrepo.com/show/404631/agriculture.svg", width=80)
-    st.title("Agri-Chefchaouen v2")
-    st.divider()
-    
-    menu = st.radio(
-        "Navigation",
-        ["🏠 Tableau de Bord", "📊 Analyses Avancées", "🤖 Expert IA", "📂 Données Brutes"],
-        key="main_nav"
-    )
-    
-    st.divider()
-    if st.button("🔄 Forcer la mise à jour"):
-        st.cache_data.clear()
-        st.rerun()
 
 # Chargement des données
 try:
     data = load_all_data(SHEET_ID)
 except Exception as e:
-    st.error(f"Erreur de connexion : {e}")
+    st.error(f"Erreur lors du chargement des données : {e}")
     st.stop()
 
-# --- 4. PAGES ---
+# --- 4. SIDEBAR ---
+with st.sidebar:
+    st.image("https://www.svgrepo.com/show/404631/agriculture.svg", width=80)
+    st.title("Agri-Chefchaouen")
+    st.divider()
+    menu = st.radio("Navigation", ["🏠 Accueil", "📊 Graphiques", "🤖 Expert IA"])
+    st.divider()
+    if st.button("🔄 Actualiser"):
+        st.cache_data.clear()
+        st.rerun()
 
-if menu == "🏠 Tableau de Bord":
-    st.title("🏠 Synthèse Provinciale")
+# --- 5. PAGES ---
+
+if menu == "🏠 Accueil":
+    st.title("🌿 Tableau de Bord Agricole")
     
-    # KPIs en haut
-    col1, col2, col3, col4 = st.columns(4)
+    # KPIs dynamiques
     if "PRODUCTION VEGETALE Céréales" in data:
         df_c = data["PRODUCTION VEGETALE Céréales"]
-        col1.metric("Surface Totale Blé (Ha)", f"{df_c['BD_Sup'].sum():,.0f}")
-        col2.metric("Rendement Moyen", f"{df_c['BD_Rdt'].mean():.1f} qx/ha")
-        col3.metric("Communes Actives", len(df_c))
-        col4.metric("Status Campagne", "En cours", delta="Optimiste")
+        col1, col2, col3 = st.columns(3)
+        with col1: st.metric("Surface Blé Dur (Ha)", f"{df_c['BD_Sup'].sum():,.0f}")
+        with col2: st.metric("Rendement Moyen BD", f"{df_c['BD_Rdt'].mean():.1f} qx/ha")
+        with col3: st.metric("Nb Communes", len(df_c))
 
-    st.markdown("---")
-    
-    # Graphique interactif principal
-    st.subheader("📊 Comparaison des Rendements par Commune")
-    sheet_sel = st.selectbox("Choisir une catégorie", list(data.keys()))
-    df_sel = data[sheet_sel]
-    
-    # On cherche les colonnes de rendement (Rdt)
-    rdt_cols = [c for c in df_sel.columns if "Rdt" in c]
-    if rdt_cols:
-        target_rdt = st.selectbox("Culture", rdt_cols)
-        fig = px.bar(df_sel, x="Commune", y=target_rdt, color=target_rdt,
-                     color_continuous_scale="Greens", template="plotly_white")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Pas de données de rendement sur cette feuille.")
+    st.divider()
+    st.subheader("Aperçu rapide des données")
+    sheet_sel = st.selectbox("Sélectionner une catégorie", list(data.keys()))
+    st.dataframe(data[sheet_sel], use_container_width=True)
 
-elif menu == "📊 Analyses Avancées":
-    st.title("📊 Corrélation et Distribution")
+elif menu == "📊 Graphiques":
+    st.title("📊 Analyses Visuelles")
+    sheet_sel = st.selectbox("Données à analyser", list(data.keys()))
+    df = data[sheet_sel]
     
-    sheet_name = st.selectbox("Source de données", list(data.keys()), key="adv_sheet")
-    df = data[sheet_name]
+    # Choix des colonnes numériques pour le graphique
+    num_cols = [c for c in df.columns if c != "Commune"]
+    target = st.selectbox("Variable à afficher", num_cols)
     
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.subheader("📈 Courbe de tendance")
-        cols_num = df.select_dtypes(include=['number']).columns
-        x_axis = st.selectbox("Axe X", df.columns, index=0)
-        y_axis = st.selectbox("Axe Y", cols_num)
-        fig_scat = px.scatter(df, x=x_axis, y=y_axis, size=y_axis, color="Commune", hover_name="Commune", trendline="ols")
-        st.plotly_chart(fig_scat, use_container_width=True)
+    fig = px.bar(df, x="Commune", y=target, color=target, 
+                 title=f"Répartition de : {target}",
+                 color_continuous_scale="Viridis", template="plotly_white")
+    st.plotly_chart(fig, use_container_width=True)
 
-    with c2:
-        st.subheader("🥧 Répartition Partielle")
-        fig_pie = px.pie(df.head(10), values=y_axis, names="Commune", hole=0.4)
-        st.plotly_chart(fig_pie, use_container_width=True)
+    
 
 elif menu == "🤖 Expert IA":
-    st.title("🤖 Assistant IA Décisionnel")
-    st.markdown("Posez vos questions sur les tendances agricoles de la province.")
-
+    st.title("🤖 Expert IA")
+    
     if "gemini_api_key" not in st.secrets:
-        st.warning("Veuillez ajouter 'gemini_api_key' dans les secrets.")
+        st.error("Clé 'gemini_api_key' introuvable dans les secrets.")
     else:
         genai.configure(api_key=st.secrets["gemini_api_key"])
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -166,20 +146,19 @@ elif menu == "🤖 Expert IA":
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if prompt := st.chat_input("Ex: Quelle commune a le meilleur rendement en Olivier ?"):
+        if prompt := st.chat_input("Posez votre question..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
 
-            # Envoi d'un mini-contexte pour aider l'IA
-            context = f"Données de la feuille sélectionnée: {data[list(data.keys())[0]].head(10).to_string()}"
-            
-            with st.chat_message("assistant"):
-                with st.spinner("Analyse en cours..."):
-                    response = model.generate_content(f"{context}\n\nQuestion: {prompt}")
-                    st.markdown(response.text)
-                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+            # Création du contexte pour l'IA
+            current_df = data[list(data.keys())[0]].head(10).to_string()
+            full_prompt = f"Voici les 10 premières lignes des données : \n{current_df}\n\nQuestion : {prompt}"
 
-elif menu == "📂 Données Brutes":
-    st.title("📂 Explorateur de Fichiers")
-    sel = st.selectbox("Sélectionner la table", list(data.keys()))
-    st.dataframe(data[sel], use_container_width=True)
+            with st.chat_message("assistant"):
+                with st.spinner("L'expert réfléchit..."):
+                    try:
+                        response = model.generate_content(full_prompt)
+                        st.markdown(response.text)
+                        st.session_state.messages.append({"role": "assistant", "content": response.text})
+                    except Exception as e:
+                        st.error(f"Erreur IA : {e}")
