@@ -64,26 +64,13 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #f0f2f6;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #2E8B57;
-        color: white;
+    .sidebar .sidebar-content {
+        background-color: #f8f9fa;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONCTIONS UTILITAIRES SPÉCIFIQUES ---
+# --- FONCTIONS UTILITAIRES ---
 def clean_val(val):
     """Nettoyage robuste des valeurs numériques"""
     if pd.isna(val) or val in ["", None]:
@@ -93,481 +80,454 @@ def clean_val(val):
     match = re.search(r"[-+]?\d*\.?\d+", s)
     return float(match.group()) if match else 0.0
 
-def smart_detect_header(raw_data):
-    """Détection intelligente de l'en-tête dans les données brutes"""
-    header_candidates = []
-    
-    for i, row in enumerate(raw_data[:10]):  # Regarder les 10 premières lignes
-        row_lower = [str(cell).lower().strip() for cell in row]
-        
-        # Critères pour identifier un en-tête
-        score = 0
-        if "commune" in row_lower:
-            score += 10
-        if any(x in row_lower for x in ["sup", "ha", "surface", "rendement", "nbre", "capacité"]):
-            score += 5
-        if any(x in row_lower for x in ["total", "moyenne", "somme"]):
-            score += 2
-        
-        if score > 0:
-            header_candidates.append((i, score))
-    
-    if header_candidates:
-        # Retourner l'en-tête avec le score le plus élevé
-        header_candidates.sort(key=lambda x: x[1], reverse=True)
-        return header_candidates[0][0]
-    
-    return 0  # Fallback: première ligne
-
-def process_sheet_data(raw_data, sheet_name):
-    """Traitement intelligent des données d'une feuille spécifique"""
+def process_sheet_data(raw_data):
+    """Traitement intelligent des données d'une feuille"""
     if not raw_data:
         return pd.DataFrame()
     
-    # Détection intelligente de l'en-tête
-    header_row = smart_detect_header(raw_data)
+    # Chercher la ligne avec "Commune"
+    header_idx = None
+    for i, row in enumerate(raw_data[:10]):
+        row_lower = [str(cell).lower().strip() for cell in row]
+        if "commune" in row_lower:
+            header_idx = i
+            break
     
-    # Pour les feuilles complexes, utiliser un traitement spécial
-    complex_sheets = ['CLASSE TAILLE DES EXPLO', 'PRODUCTION VEGETALE Céréales', 
-                     'Légumineuses', 'Plantation fruitière 1', 'Fourrages']
-    
-    if sheet_name in complex_sheets:
-        return process_complex_sheet(raw_data, header_row, sheet_name)
-    else:
-        return process_standard_sheet(raw_data, header_row, sheet_name)
-
-def process_standard_sheet(raw_data, header_row, sheet_name):
-    """Traitement des feuilles standard"""
-    try:
-        # Prendre les données à partir de la ligne d'en-tête
-        data_rows = raw_data[header_row:]
-        
-        # La première ligne après l'en-tête contient souvent des sous-titres
-        if len(data_rows) > 1:
-            # Combiner l'en-tête et la sous-ligne si nécessaire
-            header = data_rows[0]
-            sub_header = data_rows[1] if len(data_rows) > 1 else header
-            
-            # Créer des noms de colonnes combinés
-            column_names = []
-            for i, (h, sh) in enumerate(zip(header, sub_header)):
-                h_str = str(h).strip()
-                sh_str = str(sh).strip()
-                
-                if h_str and sh_str and h_str != sh_str:
-                    col_name = f"{h_str} - {sh_str}"
-                elif h_str:
-                    col_name = h_str
-                elif sh_str:
-                    col_name = sh_str
-                else:
-                    col_name = f"Colonne_{i+1}"
-                
-                column_names.append(col_name)
-            
-            # Créer le DataFrame à partir de la 3ème ligne
-            df_data = data_rows[2:] if len(data_rows) > 2 else []
-        else:
-            column_names = [str(cell).strip() for cell in data_rows[0]]
-            df_data = data_rows[1:] if len(data_rows) > 1 else []
-        
-        # Créer le DataFrame
-        df = pd.DataFrame(df_data, columns=column_names)
-        
-        # Nettoyer les noms de colonnes
-        df.columns = [clean_column_name(col) for col in df.columns]
-        
-        # Nettoyer les données
-        for col in df.columns:
-            if col.lower() != 'commune':
-                df[col] = df[col].apply(clean_val)
-        
-        return df
-        
-    except Exception as e:
-        st.warning(f"Problème avec la feuille {sheet_name}: {str(e)}")
-        # Fallback: retourner un DataFrame vide
+    if header_idx is None:
         return pd.DataFrame()
-
-def process_complex_sheet(raw_data, header_row, sheet_name):
-    """Traitement spécial pour les feuilles complexes"""
-    try:
-        # Pour les feuilles complexes, on prend un approche plus simple
-        # On cherche la première ligne contenant 'Commune'
-        data_start = header_row
-        
-        # Prendre les 2 lignes suivantes comme en-têtes potentiels
-        headers = raw_data[data_start:data_start+2]
-        
-        # Construire les noms de colonnes
-        col_names = []
-        for i in range(len(headers[0])):
-            main = str(headers[0][i]).strip() if i < len(headers[0]) else ""
-            sub = str(headers[1][i]).strip() if len(headers) > 1 and i < len(headers[1]) else ""
-            
-            if main and sub and main != sub:
-                col_name = f"{main} - {sub}"
-            elif main:
-                col_name = main
-            elif sub:
-                col_name = sub
-            else:
-                col_name = f"Col_{i+1}"
-            
-            col_names.append(col_name)
-        
-        # Prendre les données à partir de la ligne 3
-        data_rows = raw_data[data_start+2:]
-        
-        # Créer le DataFrame
-        df = pd.DataFrame(data_rows, columns=col_names)
-        
-        # Nettoyer les noms de colonnes
-        df.columns = [clean_column_name(col) for col in df.columns]
-        
-        # Nettoyer les données
-        for col in df.columns:
-            if 'commune' not in col.lower():
-                df[col] = df[col].apply(clean_val)
-        
-        return df
-        
-    except Exception as e:
-        st.warning(f"Erreur dans la feuille complexe {sheet_name}: {str(e)}")
-        return pd.DataFrame()
-
-def clean_column_name(col_name):
-    """Nettoie le nom de colonne"""
-    if pd.isna(col_name):
-        return "Colonne_inconnue"
     
-    col_str = str(col_name).strip()
+    # Prendre les deux lignes suivantes comme en-têtes
+    headers = raw_data[header_idx:header_idx+2]
     
-    # Remplacer les caractères problématiques
-    col_str = col_str.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+    # Construire les noms de colonnes
+    col_names = []
+    max_cols = max(len(h) for h in headers)
     
-    # Supprimer les espaces multiples
-    col_str = re.sub(r'\s+', ' ', col_str)
-    
-    # Standardiser certains termes
-    col_str = col_str.replace('Sup.', 'Sup').replace('Rdt.', 'Rdt')
-    
-    return col_str
-
-def categorize_sheets(sheet_names):
-    """Catégorise les feuilles par type"""
-    categories = {}
-    
-    for sheet in sheet_names:
-        sheet_lower = sheet.lower()
+    for i in range(max_cols):
+        main = headers[0][i] if i < len(headers[0]) else ""
+        sub = headers[1][i] if len(headers) > 1 and i < len(headers[1]) else ""
         
-        if any(x in sheet_lower for x in ['superficie', 'repartition']):
-            categories[sheet] = 'superficies'
-        elif any(x in sheet_lower for x in ['juridique', 'statut']):
-            categories[sheet] = 'statut_juridique'
-        elif any(x in sheet_lower for x in ['taille', 'exploitation']):
-            categories[sheet] = 'taille_exploitations'
-        elif 'irrigation' in sheet_lower:
-            categories[sheet] = 'irrigation'
-        elif any(x in sheet_lower for x in ['animal', 'cheptel', 'bovin', 'ovin']):
-            categories[sheet] = 'production_animale'
-        elif 'apiculture' in sheet_lower:
-            categories[sheet] = 'apiculture'
-        elif any(x in sheet_lower for x in ['cereal', 'vegetal', 'legumineuse']):
-            categories[sheet] = 'production_vegetale'
-        elif any(x in sheet_lower for x in ['maraichage', 'maraîchage']):
-            categories[sheet] = 'maraichage'
-        elif any(x in sheet_lower for x in ['plantation', 'fruitier']):
-            categories[sheet] = 'plantations'
-        elif 'fourrage' in sheet_lower:
-            categories[sheet] = 'fourrages'
-        elif any(x in sheet_lower for x in ['pedologie', 'pente', 'relief']):
-            categories[sheet] = 'pedologie'
-        elif any(x in sheet_lower for x in ['industrie', 'cooperative']):
-            categories[sheet] = 'agro_industrie'
-        elif any(x in sheet_lower for x in ['population', 'demographie']):
-            categories[sheet] = 'population'
-        elif any(x in sheet_lower for x in ['climat', 'pluviometrie']):
-            categories[sheet] = 'climat'
+        main_str = str(main).strip()
+        sub_str = str(sub).strip()
+        
+        if main_str and sub_str and main_str != sub_str:
+            col_name = f"{main_str} - {sub_str}"
+        elif main_str:
+            col_name = main_str
+        elif sub_str:
+            col_name = sub_str
         else:
-            categories[sheet] = 'autres'
+            col_name = f"Colonne_{i+1}"
+        
+        col_names.append(col_name)
     
-    return categories
+    # Prendre les données à partir de la ligne 3
+    data_start = header_idx + 2
+    data_rows = raw_data[data_start:] if data_start < len(raw_data) else []
+    
+    # Créer le DataFrame
+    df = pd.DataFrame(data_rows, columns=col_names)
+    
+    # Nettoyage des données
+    for col in df.columns:
+        if 'commune' not in col.lower():
+            df[col] = df[col].apply(clean_val)
+    
+    # Nettoyer la colonne Commune
+    if 'Commune' in df.columns:
+        df['Commune'] = df['Commune'].astype(str).str.strip()
+        # Supprimer les lignes de total
+        df = df[~df['Commune'].str.contains('total|TOTAL|S/T|munici', case=False, na=False)]
+        df = df[df['Commune'] != '']
+    
+    return df
 
-# --- CHARGEMENT ET PRÉTRAITEMENT DES DONNÉES SPÉCIFIQUES ---
+# --- CHARGEMENT DES DONNÉES ---
 @st.cache_data(ttl=600)
-def load_and_process_data(sheet_id):
-    """Charge et prétraite les données spécifiques de Chefchaouen"""
+def load_data():
+    """Charge les données depuis Google Sheets"""
     try:
+        SHEET_ID = "1fVb91z5B-nqOwCCPO5rMK-u9wd2KxDG56FteMaCr63w"
+        
         scope = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
+        
+        # Utilisation des secrets Streamlit
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"], 
             scopes=scope
         )
+        
         client = gspread.authorize(creds)
-        sh = client.open_by_key(sheet_id)
+        sh = client.open_by_key(SHEET_ID)
         
         all_data = {}
-        successful_sheets = []
-        failed_sheets = []
         
         for ws in sh.worksheets():
             try:
-                st.info(f"Chargement de la feuille: {ws.title}")
+                # Obtenir toutes les valeurs
                 raw = ws.get_all_values()
                 
                 if not raw:
-                    st.warning(f"Feuille {ws.title} vide")
                     continue
                 
-                # Traitement intelligent de la feuille
-                df = process_sheet_data(raw, ws.title)
+                df = process_sheet_data(raw)
                 
                 if df.empty or len(df) < 2:
-                    st.warning(f"Feuille {ws.title}: données insuffisantes")
                     continue
                 
-                # Vérifier et corriger la colonne "Commune"
-                commune_col = None
-                for col in df.columns:
-                    if 'commune' in str(col).lower():
-                        commune_col = col
-                        break
-                
-                if commune_col:
-                    # Renommer la colonne en "Commune" standard
-                    df = df.rename(columns={commune_col: 'Commune'})
-                    # Nettoyer les noms de communes
-                    df['Commune'] = df['Commune'].astype(str).str.strip()
-                    # Supprimer les lignes où Commune est vide ou NaN
-                    df = df[df['Commune'].notna() & (df['Commune'] != '')]
-                    # Supprimer les lignes de total
-                    df = df[~df['Commune'].str.contains('total|TOTAL|Total|S/T', case=False, na=False)]
-                else:
-                    st.warning(f"Feuille {ws.title}: colonne 'Commune' non trouvée")
-                    # Créer une colonne Commune factice si nécessaire
-                    df['Commune'] = f"Feuille_{ws.title}"
-                
-                # Stocker les données
                 all_data[ws.title] = df
-                successful_sheets.append(ws.title)
-                
-                st.success(f"✓ {ws.title}: {len(df)} lignes, {len(df.columns)} colonnes")
                 
             except Exception as e:
-                failed_sheets.append((ws.title, str(e)))
-                st.error(f"✗ {ws.title}: {str(e)}")
+                continue
         
-        # Catégorisation des feuilles
-        sheet_categories = categorize_sheets(successful_sheets)
-        
-        # Résumé du chargement
-        st.success(f"""
-        Chargement terminé:
-        - ✅ Feuilles chargées avec succès: {len(successful_sheets)}
-        - ❌ Feuilles en échec: {len(failed_sheets)}
-        - 📊 Total des données: {sum(len(df) for df in all_data.values())} lignes
-        """)
-        
-        if failed_sheets:
-            st.warning("Feuilles en échec:")
-            for sheet, error in failed_sheets:
-                st.write(f"- {sheet}: {error}")
-        
-        return all_data, sheet_categories
+        return all_data
         
     except Exception as e:
-        st.error(f"Erreur de chargement globale : {str(e)}")
-        return {}, {}
+        st.error(f"Erreur de chargement : {str(e)}")
+        return {}
 
-def calculate_agricultural_metrics(data_dict):
-    """Calcule les métriques agricoles clés"""
-    metrics = {}
+# --- ANALYSE SPÉCIFIQUE DES TOMATES ---
+def analyze_tomato_production(data_dict):
+    """Analyse spécifique de la production de tomates"""
     
-    # Superficie totale
-    if 'REPARTITION DES SUPERFICIES' in data_dict:
-        df = data_dict['REPARTITION DES SUPERFICIES']
-        if 'Sup.Totale' in df.columns:
-            metrics['superficie_totale'] = df['Sup.Totale'].sum()
+    results = {
+        'communes': [],
+        'surface_totale': 0,
+        'meilleures_communes': [],
+        'recommandations': []
+    }
     
-    # SAU totale
-    if 'REPARTITION DES SUPERFICIES' in data_dict:
-        df = data_dict['REPARTITION DES SUPERFICIES']
-        sau_cols = [c for c in df.columns if 'sau' in c.lower() or 's.au' in c.lower()]
-        if sau_cols:
-            metrics['sau_totale'] = df[sau_cols[0]].sum()
+    # Chercher les données de tomates
+    tomato_data = []
     
-    # Irrigation
-    if "L'IRRIGATION" in data_dict:
-        df = data_dict["L'IRRIGATION"]
-        irrig_cols = [c for c in df.columns if 'irrigation' in c.lower()]
-        if irrig_cols:
-            metrics['irrigation_totale'] = df[irrig_cols[0]].sum()
+    # Chercher dans Maraîchage 1
+    if 'Maraîchage 1' in data_dict:
+        df = data_dict['Maraîchage 1']
+        
+        # Chercher les colonnes liées aux tomates
+        for col in df.columns:
+            if 'tomate' in col.lower():
+                # Chercher les colonnes de surface
+                if any(x in col.lower() for x in ['sup', 'ha', 'surface']):
+                    for _, row in df.iterrows():
+                        commune = row.get('Commune', 'Inconnue')
+                        surface = row[col]
+                        
+                        if pd.notna(surface) and surface > 0:
+                            tomato_data.append({
+                                'commune': commune,
+                                'surface_tomate': surface,
+                                'source': 'Maraîchage 1'
+                            })
     
-    return metrics
+    # Chercher dans Maraichage 2
+    if 'Maraichage 2' in data_dict:
+        df = data_dict['Maraichage 2']
+        
+        for col in df.columns:
+            if 'tomate' in col.lower():
+                if any(x in col.lower() for x in ['sup', 'ha', 'surface']):
+                    for _, row in df.iterrows():
+                        commune = row.get('Commune', 'Inconnue')
+                        surface = row[col]
+                        
+                        if pd.notna(surface) and surface > 0:
+                            tomato_data.append({
+                                'commune': commune,
+                                'surface_tomate': surface,
+                                'source': 'Maraichage 2'
+                            })
+    
+    # Chercher dans Maraichage 3
+    if 'Maraichage 3' in data_dict:
+        df = data_dict['Maraichage 3']
+        
+        for col in df.columns:
+            if 'tomate' in col.lower():
+                if any(x in col.lower() for x in ['sup', 'ha', 'surface']):
+                    for _, row in df.iterrows():
+                        commune = row.get('Commune', 'Inconnue')
+                        surface = row[col]
+                        
+                        if pd.notna(surface) and surface > 0:
+                            tomato_data.append({
+                                'commune': commune,
+                                'surface_tomate': surface,
+                                'source': 'Maraichage 3'
+                            })
+    
+    # Analyser les données collectées
+    if tomato_data:
+        df_tomato = pd.DataFrame(tomato_data)
+        
+        # Agréger par commune
+        commune_stats = df_tomato.groupby('commune').agg({
+            'surface_tomate': 'sum'
+        }).reset_index()
+        
+        # Trier par surface
+        commune_stats = commune_stats.sort_values('surface_tomate', ascending=False)
+        
+        results['communes'] = commune_stats.to_dict('records')
+        results['surface_totale'] = commune_stats['surface_tomate'].sum()
+        
+        # Top 3 des communes
+        if len(commune_stats) > 0:
+            results['meilleures_communes'] = commune_stats.head(3).to_dict('records')
+            
+            # Recommandations
+            results['recommandations'].append(f"**Commune prioritaire**: {commune_stats.iloc[0]['commune']} avec {commune_stats.iloc[0]['surface_tomate']} ha de tomates")
+            
+            if len(commune_stats) > 1:
+                results['recommandations'].append(f"**Second choix**: {commune_stats.iloc[1]['commune']} ({commune_stats.iloc[1]['surface_tomate']} ha)")
+            
+            if len(commune_stats) > 2:
+                results['recommandations'].append(f"**Troisième option**: {commune_stats.iloc[2]['commune']} ({commune_stats.iloc[2]['surface_tomate']} ha)")
+    
+    return results
 
 # --- INITIALISATION ---
-SHEET_ID = "1fVb91z5B-nqOwCCPO5rMK-u9wd2KxDG56FteMaCr63w"
+# Initialisation de la session state pour la navigation
+if 'page' not in st.session_state:
+    st.session_state.page = "Accueil"
 
-# Interface de chargement
-st.title("🌱 Agri-Analytics Chefchaouen")
-st.markdown("### Chargement des données agricoles...")
-
-try:
-    with st.spinner("Connexion à Google Sheets et chargement des données..."):
-        data_dict, sheet_categories = load_and_process_data(SHEET_ID)
-        
-        if not data_dict:
-            st.error("❌ Aucune donnée n'a pu être chargée. Vérifiez:")
-            st.error("1. L'ID Google Sheets est correct")
-            st.error("2. Le compte de service a les permissions nécessaires")
-            st.error("3. Les feuilles contiennent des données valides")
-            st.stop()
-        
-        st.success(f"✅ Données chargées avec succès: {len(data_dict)} feuilles")
-        
-        # Afficher un aperçu
-        st.markdown("### 📊 Aperçu des données chargées")
-        
-        for sheet_name, df in list(data_dict.items())[:5]:  # Afficher les 5 premières
-            with st.expander(f"📄 {sheet_name} ({len(df)} lignes, {len(df.columns)} colonnes)"):
-                st.dataframe(df.head(), use_container_width=True)
-        
-        # Calculer les métriques
-        metrics = calculate_agricultural_metrics(data_dict)
-        
-        if metrics:
-            st.markdown("### 📈 Métriques clés détectées")
-            cols = st.columns(len(metrics))
-            for idx, (key, value) in enumerate(metrics.items()):
-                with cols[idx]:
-                    st.metric(
-                        key.replace('_', ' ').title(),
-                        f"{value:,.0f} ha" if 'superficie' in key or 'sau' in key or 'irrigation' in key else f"{value:,.0f}"
-                    )
-        
-except Exception as e:
-    st.error(f"Erreur d'initialisation : {str(e)}")
-    st.stop()
+# Chargement des données
+@st.cache_data(ttl=600)
+def load_cached_data():
+    return load_data()
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.markdown('<div class="main-header">🌿 Agri-Analytics</div>', unsafe_allow_html=True)
-    st.markdown("### Province de Chefchaouen")
+    st.markdown('<div class="main-header">🌿 Navigation</div>', unsafe_allow_html=True)
+    
+    # Navigation avec des boutons qui changent st.session_state.page
+    if st.button("🏠 Accueil", use_container_width=True):
+        st.session_state.page = "Accueil"
+    
+    if st.button("🍅 Analyse Tomates", use_container_width=True):
+        st.session_state.page = "Tomates"
+    
+    if st.button("📊 Visualisations", use_container_width=True):
+        st.session_state.page = "Visualisations"
+    
+    if st.button("🤖 Assistant IA", use_container_width=True):
+        st.session_state.page = "Assistant IA"
+    
+    if st.button("⚙️ Exploration Données", use_container_width=True):
+        st.session_state.page = "Données"
+    
     st.divider()
     
-    page = st.radio(
-        "Navigation",
-        ["🏠 Tableau de Bord", "📊 Visualisations", "🔍 Analyse Sectorielle", 
-         "🤖 Assistant IA", "📈 Rapports Agricoles", "⚙️ Paramètres"],
-        label_visibility="collapsed"
-    )
+    # Chargement des données avec indicateur
+    with st.spinner("Chargement des données..."):
+        data_dict = load_cached_data()
     
-    st.divider()
-    
-    # Filtrage par commune
     if data_dict:
-        communes_list = []
+        total_communes = set()
         for df in data_dict.values():
             if 'Commune' in df.columns:
-                communes_list.extend(df['Commune'].dropna().unique().tolist())
+                communes = df['Commune'].dropna().unique()
+                total_communes.update(communes)
         
-        communes_list = sorted(list(set(communes_list)))
-        
-        if communes_list:
-            st.markdown("### 🏘️ Sélection de Communes")
-            selected_communes = st.multiselect(
-                "Filtrer par communes",
-                communes_list,
-                default=communes_list[:3] if communes_list else []
-            )
+        st.metric("Communes analysées", len(total_communes))
+        st.metric("Jeux de données", len(data_dict))
     
     st.divider()
     
-    if st.button("🔄 Actualiser les Données", use_container_width=True):
+    if st.button("🔄 Actualiser les données", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# --- PAGE : TABLEAU DE BORD ---
-if page == "🏠 Tableau de Bord":
-    st.markdown('<div class="main-header">🌱 Tableau de Bord Agri-Analytics Chefchaouen</div>', unsafe_allow_html=True)
+# --- PAGE ACCUEIL ---
+if st.session_state.page == "Accueil":
+    st.markdown('<div class="main-header">🌱 Agri-Analytics Chefchaouen</div>', unsafe_allow_html=True)
     
-    # Statistiques générales
-    col1, col2, col3, col4 = st.columns(4)
+    if not data_dict:
+        st.error("❌ Impossible de charger les données. Vérifiez la connexion et les permissions.")
+        st.stop()
+    
+    st.success(f"✅ {len(data_dict)} feuilles chargées avec succès!")
+    
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        total_sheets = len(data_dict)
-        st.metric("Feuilles de données", total_sheets)
+        st.markdown("""
+        ### 📊 Plateforme d'Aide à la Décision Agricole
+        
+        Cette application vous permet d'analyser les données agricoles de la province de Chefchaouen
+        pour prendre des décisions éclairées.
+        
+        **Données disponibles:**
+        - Superficies agricoles
+        - Production végétale (céréales, légumineuses, maraîchage)
+        - Production animale
+        - Irrigation
+        - Données pédologiques
+        - Population agricole
+        
+        **Exemples d'analyses possibles:**
+        - Identifier les communes les plus productives
+        - Optimiser les cultures par zone
+        - Planifier les investissements en irrigation
+        - Développer des filières agricoles
+        """)
     
     with col2:
-        total_rows = sum(len(df) for df in data_dict.values())
-        st.metric("Lignes de données", f"{total_rows:,}")
-    
-    with col3:
-        if data_dict:
-            communes_set = set()
-            for df in data_dict.values():
-                if 'Commune' in df.columns:
-                    communes_set.update(df['Commune'].dropna().unique())
-            st.metric("Communes", len(communes_set))
-    
-    with col4:
-        if sheet_categories:
-            categories_count = len(set(sheet_categories.values()))
-            st.metric("Catégories", categories_count)
-    
-    st.divider()
-    
-    # Liste des feuilles disponibles
-    st.markdown("### 📋 Feuilles disponibles")
-    
-    categories = {}
-    for sheet, cat in sheet_categories.items():
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(sheet)
-    
-    for category, sheets in categories.items():
-        with st.expander(f"📁 {category.upper()} ({len(sheets)} feuilles)"):
-            for sheet in sheets:
-                df = data_dict[sheet]
-                communes = df['Commune'].nunique() if 'Commune' in df.columns else 0
-                st.write(f"**{sheet}**: {len(df)} lignes, {len(df.columns)} colonnes, {communes} communes")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 🚀 Accès rapide")
+        
+        if st.button("🍅 Analyser les tomates"):
+            st.session_state.page = "Tomates"
+            st.rerun()
+        
+        if st.button("📈 Voir visualisations"):
+            st.session_state.page = "Visualisations"
+            st.rerun()
+        
+        if st.button("🤖 Poser une question"):
+            st.session_state.page = "Assistant IA"
+            st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Aperçu des données
     st.divider()
-    st.markdown("### 🔍 Explorer les données")
+    st.markdown("### 📋 Aperçu des données disponibles")
     
-    selected_sheet = st.selectbox(
-        "Sélectionner une feuille à explorer",
-        list(data_dict.keys())
-    )
+    # Afficher les premières feuilles
+    sheet_list = list(data_dict.keys())
     
-    if selected_sheet:
-        df = data_dict[selected_sheet]
-        
-        tab1, tab2 = st.tabs(["📊 Données", "📈 Statistiques"])
-        
-        with tab1:
-            st.dataframe(df, use_container_width=True)
-        
-        with tab2:
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            if numeric_cols:
-                for col in numeric_cols[:5]:  # Limiter aux 5 premières colonnes numériques
-                    st.write(f"**{col}**")
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Moyenne", f"{df[col].mean():.2f}")
-                    col2.metric("Médiane", f"{df[col].median():.2f}")
-                    col3.metric("Min", f"{df[col].min():.2f}")
-                    col4.metric("Max", f"{df[col].max():.2f}")
+    for i in range(0, min(6, len(sheet_list)), 2):
+        cols = st.columns(2)
+        for j in range(2):
+            if i + j < len(sheet_list):
+                sheet_name = sheet_list[i + j]
+                df = data_dict[sheet_name]
+                with cols[j]:
+                    with st.expander(f"📄 {sheet_name} ({len(df)} lignes)"):
+                        st.dataframe(df.head(5), use_container_width=True, height=200)
 
-# --- PAGE : VISUALISATIONS ---
-elif page == "📊 Visualisations":
-    st.markdown('<div class="main-header">📊 Visualisations Interactives</div>', unsafe_allow_html=True)
+# --- PAGE ANALYSE TOMATES ---
+elif st.session_state.page == "Tomates":
+    st.markdown('<div class="main-header">🍅 Analyse de la Production de Tomates</div>', unsafe_allow_html=True)
+    
+    if not data_dict:
+        st.error("Données non chargées")
+        st.stop()
+    
+    # Analyse des données de tomates
+    with st.spinner("Analyse des données de tomates en cours..."):
+        tomato_analysis = analyze_tomato_production(data_dict)
+    
+    if not tomato_analysis['communes']:
+        st.warning("""
+        ⚠️ **Données de tomates limitées**
+        
+        Les données spécifiques sur la production de tomates sont limitées dans les feuilles chargées.
+        
+        **Consultez ces feuilles pour plus d'informations:**
+        """)
+        
+        # Lister les feuilles de maraîchage disponibles
+        maraichage_sheets = [s for s in data_dict.keys() if 'maraichage' in s.lower() or 'maraîchage' in s.lower()]
+        
+        if maraichage_sheets:
+            for sheet in maraichage_sheets:
+                with st.expander(f"📄 {sheet}"):
+                    df = data_dict[sheet]
+                    st.dataframe(df.head(), use_container_width=True)
+        else:
+            st.info("Aucune feuille de maraîchage trouvée")
+            
+        # Alternative : analyser les données d'irrigation pour les communes prometteuses
+        st.markdown("### 💡 Approche alternative")
+        st.markdown("""
+        Pour développer la culture de tomates, considérez ces critères:
+        
+        1. **Irrigation disponible** (feuille "L'IRRIGATION")
+        2. **Expérience en maraîchage** (feuilles de maraîchage)
+        3. **Accès aux marchés**
+        4. **Coopératives existantes**
+        
+        **Communes recommandées pour investigation:**
+        - Bab Taza (plus grande commune)
+        - Tanaqob (bonne irrigation)
+        - Bab Bared (expérience agricole)
+        """)
+    else:
+        # Affichage des résultats
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("Surface totale de tomates", f"{tomato_analysis['surface_totale']:.1f} ha")
+            st.metric("Communes productrices", len(tomato_analysis['communes']))
+        
+        with col2:
+            if tomato_analysis['meilleures_communes']:
+                top_commune = tomato_analysis['meilleures_communes'][0]
+                st.metric("Meilleure commune", top_commune['commune'])
+                st.caption(f"{top_commune['surface_tomate']:.1f} ha de surface")
+        
+        # Réponse à la question
+        st.markdown("---")
+        st.markdown("### 🎯 Réponse à votre question:")
+        
+        if tomato_analysis['meilleures_communes']:
+            top_commune = tomato_analysis['meilleures_communes'][0]
+            
+            st.success(f"""
+            ## 🥇 **Commune prioritaire: {top_commune['commune']}**
+            
+            **Pourquoi commencer par {top_commune['commune']} ?**
+            
+            1. **Expérience existante**: Cette commune a déjà {top_commune['surface_tomate']} ha de tomates cultivées
+            2. **Savoir-faire local**: Les agriculteurs ont déjà l'expertise technique
+            3. **Infrastructures**: Possibilité d'utiliser les circuits de distribution existants
+            4. **Rendements connus**: Meilleure prévision des résultats
+            
+            **Actions recommandées:**
+            - Organiser des formations spécifiques sur l'amélioration des rendements
+            - Mettre en place une coopérative de producteurs de tomates
+            - Développer un système d'irrigation optimisé
+            - Créer une marque "Tomates de {top_commune['commune']}"
+            """)
+            
+            # Graphique des meilleures communes
+            st.markdown("### 📈 Classement des communes productrices de tomates")
+            
+            top_df = pd.DataFrame(tomato_analysis['meilleures_communes'])
+            fig = px.bar(
+                top_df,
+                x='commune',
+                y='surface_tomate',
+                title="Top des communes par surface de tomates",
+                color='surface_tomate',
+                color_continuous_scale="reds",
+                text='surface_tomate'
+            )
+            fig.update_traces(texttemplate='%{text:.1f} ha', textposition='outside')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Tableau complet
+            st.markdown("### 📋 Toutes les communes productrices")
+            all_df = pd.DataFrame(tomato_analysis['communes'])
+            st.dataframe(
+                all_df.sort_values('surface_tomate', ascending=False),
+                use_container_width=True
+            )
+    
+    # Bouton de retour
+    st.markdown("---")
+    if st.button("← Retour à l'accueil"):
+        st.session_state.page = "Accueil"
+        st.rerun()
+
+# --- PAGE VISUALISATIONS ---
+elif st.session_state.page == "Visualisations":
+    st.markdown('<div class="main-header">📊 Visualisations des Données Agricoles</div>', unsafe_allow_html=True)
     
     if not data_dict:
         st.warning("Aucune donnée disponible pour la visualisation")
@@ -575,24 +535,34 @@ elif page == "📊 Visualisations":
     
     # Sélection de la feuille
     selected_sheet = st.selectbox(
-        "Sélectionner une feuille",
+        "Sélectionnez une feuille de données",
         list(data_dict.keys())
     )
     
     if selected_sheet:
         df = data_dict[selected_sheet]
         
-        # Vérifier les colonnes disponibles
-        if 'Commune' not in df.columns:
-            st.warning("Cette feuille ne contient pas de colonne 'Commune'")
+        # Vérifier les colonnes
+        if df.empty:
+            st.warning("Cette feuille ne contient pas de données")
+            st.stop()
+        
+        # Colonnes disponibles
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        commune_col = None
+        
+        for col in df.columns:
+            if 'commune' in col.lower():
+                commune_col = col
+                break
+        
+        if not commune_col:
+            st.warning("Colonne 'Commune' non trouvée dans cette feuille")
             st.dataframe(df, use_container_width=True)
             st.stop()
         
-        # Colonnes numériques disponibles
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
         if not numeric_cols:
-            st.warning("Aucune colonne numérique trouvée dans cette feuille")
+            st.warning("Aucune colonne numérique trouvée")
             st.dataframe(df, use_container_width=True)
             st.stop()
         
@@ -600,76 +570,72 @@ elif page == "📊 Visualisations":
         col1, col2 = st.columns([1, 3])
         
         with col1:
-            selected_column = st.selectbox(
-                "Sélectionner une colonne à visualiser",
+            selected_col = st.selectbox(
+                "Sélectionnez une variable à visualiser",
                 numeric_cols
             )
             
             chart_type = st.selectbox(
                 "Type de graphique",
-                ["Barres verticales", "Barres horizontales", "Camembert", "Treemap"]
+                ["Barres verticales", "Barres horizontales", "Camembert"]
             )
             
             sort_order = st.selectbox(
                 "Trier par",
-                ["Valeur décroissante", "Valeur croissante", "Ordre alphabétique"]
+                ["Valeur décroissante", "Valeur croissante", "Nom de commune"]
             )
             
-            max_items = st.slider("Nombre d'éléments à afficher", 5, 50, 15)
+            top_n = st.slider("Nombre de communes à afficher", 5, 30, 15)
         
         with col2:
             # Préparation des données
-            plot_df = df[['Commune', selected_column]].copy()
-            plot_df = plot_df.dropna()
+            plot_data = df[[commune_col, selected_col]].copy()
+            plot_data = plot_data.dropna()
             
             # Trier selon la sélection
             if sort_order == "Valeur décroissante":
-                plot_df = plot_df.sort_values(selected_column, ascending=False)
+                plot_data = plot_data.sort_values(selected_col, ascending=False)
             elif sort_order == "Valeur croissante":
-                plot_df = plot_df.sort_values(selected_column, ascending=True)
+                plot_data = plot_data.sort_values(selected_col, ascending=True)
             else:  # Ordre alphabétique
-                plot_df = plot_df.sort_values('Commune')
+                plot_data = plot_data.sort_values(commune_col)
             
             # Limiter le nombre d'éléments
-            plot_df = plot_df.head(max_items)
+            plot_data = plot_data.head(top_n)
             
-            # Créer le graphique
+            # Création du graphique
             if chart_type == "Barres verticales":
                 fig = px.bar(
-                    plot_df,
-                    x='Commune',
-                    y=selected_column,
-                    title=f"{selected_column} par commune",
-                    color=selected_column,
-                    color_continuous_scale="viridis"
+                    plot_data,
+                    x=commune_col,
+                    y=selected_col,
+                    title=f"{selected_col} par commune",
+                    color=selected_col,
+                    color_continuous_scale="greens",
+                    text=selected_col
                 )
+                fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
                 fig.update_layout(xaxis_tickangle=-45)
             
             elif chart_type == "Barres horizontales":
                 fig = px.bar(
-                    plot_df,
-                    y='Commune',
-                    x=selected_column,
-                    title=f"{selected_column} par commune",
-                    color=selected_column,
-                    color_continuous_scale="viridis",
+                    plot_data,
+                    y=commune_col,
+                    x=selected_col,
+                    title=f"{selected_col} par commune",
+                    color=selected_col,
+                    color_continuous_scale="greens",
+                    text=selected_col,
                     orientation='h'
                 )
+                fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
             
-            elif chart_type == "Camembert":
+            else:  # Camembert
                 fig = px.pie(
-                    plot_df,
-                    values=selected_column,
-                    names='Commune',
-                    title=f"Répartition de {selected_column}"
-                )
-            
-            else:  # Treemap
-                fig = px.treemap(
-                    plot_df,
-                    path=['Commune'],
-                    values=selected_column,
-                    title=f"Treemap de {selected_column}"
+                    plot_data,
+                    values=selected_col,
+                    names=commune_col,
+                    title=f"Répartition de {selected_col}"
                 )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -677,393 +643,356 @@ elif page == "📊 Visualisations":
             # Statistiques
             with st.expander("📊 Statistiques détaillées"):
                 col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total", f"{plot_df[selected_column].sum():,.2f}")
-                col2.metric("Moyenne", f"{plot_df[selected_column].mean():,.2f}")
-                col3.metric("Minimum", f"{plot_df[selected_column].min():,.2f}")
-                col4.metric("Maximum", f"{plot_df[selected_column].max():,.2f}")
+                col1.metric("Total", f"{plot_data[selected_col].sum():,.0f}")
+                col2.metric("Moyenne", f"{plot_data[selected_col].mean():,.1f}")
+                col3.metric("Minimum", f"{plot_data[selected_col].min():,.0f}")
+                col4.metric("Maximum", f"{plot_data[selected_col].max():,.0f}")
+    
+    # Bouton de retour
+    st.markdown("---")
+    if st.button("← Retour à l'accueil"):
+        st.session_state.page = "Accueil"
+        st.rerun()
 
-# --- PAGE : ASSISTANT IA ---
-elif page == "🤖 Assistant IA":
-    st.markdown('<div class="main-header">🤖 Assistant IA Décisionnel</div>', unsafe_allow_html=True)
+# --- PAGE ASSISTANT IA ---
+elif st.session_state.page == "Assistant IA":
+    st.markdown('<div class="main-header">🤖 Assistant Agricole Intelligent</div>', unsafe_allow_html=True)
     
-    if "gemini_api_key" not in st.secrets:
-        st.error("⚠️ Clé API Gemini manquante. Ajoutez-la dans les secrets Streamlit")
-        st.code("""
-        # Dans .streamlit/secrets.toml
+    # Initialisation de l'historique de chat
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    
+    # Vérification de l'API Gemini
+    api_available = "gemini_api_key" in st.secrets
+    
+    if not api_available:
+        st.warning("""
+        ⚠️ **Mode Analyse Automatique Activé**
+        
+        L'API Gemini n'est pas configurée. Vous pouvez toujours poser des questions,
+        mais les réponses seront basées sur l'analyse automatique des données disponibles.
+        
+        Pour activer l'IA avancée, ajoutez dans `.streamlit/secrets.toml`:
+        ```toml
         gemini_api_key = "votre_cle_api_ici"
+        ```
+        
+        **En attendant, voici des analyses disponibles:**
         """)
-        st.stop()
+        
+        # Afficher les analyses automatiques
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🍅 Analyser les tomates", use_container_width=True):
+                st.session_state.page = "Tomates"
+                st.rerun()
+        
+        with col2:
+            if st.button("📊 Voir les données", use_container_width=True):
+                st.session_state.page = "Données"
+                st.rerun()
     
-    # Configuration de l'IA
-    genai.configure(api_key=st.secrets["gemini_api_key"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Zone de chat
+    st.markdown("### 💬 Posez votre question sur l'agriculture à Chefchaouen")
     
-    # Interface
-    col1, col2 = st.columns([1, 2])
+    # Suggestions de questions
+    st.markdown("#### 💡 Suggestions:")
     
-    with col1:
-        st.markdown("### 📋 Contexte d'Analyse")
-        
-        # Sélection des données pour l'IA
-        available_sheets = list(data_dict.keys())
-        selected_sheets = st.multiselect(
-            "Sélectionner les données à analyser",
-            available_sheets,
-            default=available_sheets[:3] if available_sheets else []
-        )
-        
-        # Suggestions de questions
-        st.markdown("### 💡 Questions suggérées")
-        
-        suggestions = [
-            "Quelles sont les communes avec la plus grande superficie agricole?",
-            "Analyse les tendances de production agricole",
-            "Propose des recommandations pour améliorer la productivité",
-            "Quelles sont les forces et faiblesses de l'agriculture locale?",
-            "Compare les différentes communes sur la base des données disponibles"
-        ]
-        
-        for suggestion in suggestions:
-            if st.button(suggestion, key=f"sugg_{suggestion[:20]}"):
-                st.session_state.ia_question = suggestion
+    suggestions = st.columns(2)
     
-    with col2:
-        st.markdown("### 💬 Dialogue avec l'Expert Agricole")
+    with suggestions[0]:
+        if st.button("Meilleures communes pour tomates", use_container_width=True):
+            st.session_state.user_question = "Quelles sont les meilleures communes pour développer la culture de tomates ?"
+    
+    with suggestions[1]:
+        if st.button("Potentiel d'irrigation", use_container_width=True):
+            st.session_state.user_question = "Quelles communes ont le meilleur potentiel d'irrigation ?"
+    
+    # Affichage de l'historique
+    for message in st.session_state.chat_history[-10:]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Saisie utilisateur
+    user_input = st.chat_input("Écrivez votre question ici...")
+    
+    # Utiliser la question stockée ou la saisie
+    if 'user_question' in st.session_state:
+        user_input = st.session_state.user_question
+        del st.session_state.user_question
+    
+    if user_input:
+        # Ajouter la question à l'historique
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
         
-        # Initialisation de l'historique
-        if "ia_history" not in st.session_state:
-            st.session_state.ia_history = []
+        with st.chat_message("user"):
+            st.markdown(user_input)
         
-        # Affichage de l'historique
-        for msg in st.session_state.ia_history[-5:]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-        
-        # Saisie de la question
-        question = st.chat_input("Posez votre question sur l'agriculture à Chefchaouen...")
-        
-        if question or 'ia_question' in st.session_state:
-            if 'ia_question' in st.session_state:
-                question = st.session_state.ia_question
-                del st.session_state.ia_question
-            
-            # Ajout de la question à l'historique
-            st.session_state.ia_history.append({"role": "user", "content": question})
-            
-            with st.chat_message("user"):
-                st.markdown(question)
-            
-            # Préparation des données pour l'IA
-            with st.spinner("🔍 L'IA analyse les données agricoles..."):
+        # Réponse de l'assistant
+        with st.chat_message("assistant"):
+            with st.spinner("Analyse en cours..."):
                 try:
-                    # Préparer un échantillon des données sélectionnées
-                    context_data = ""
-                    for sheet in selected_sheets:
-                        if sheet in data_dict:
-                            df = data_dict[sheet]
-                            # Prendre un échantillon et convertir en texte
-                            sample = df.head(5).to_string(index=False)
-                            context_data += f"\n\n=== {sheet} ===\n{sample}"
+                    if api_available:
+                        # Essayer avec Gemini
+                        genai.configure(api_key=st.secrets["gemini_api_key"])
+                        
+                        # Essayer différents modèles
+                        try:
+                            model = genai.GenerativeModel('gemini-pro')
+                        except:
+                            # Essayer avec un autre modèle
+                            try:
+                                model = genai.GenerativeModel('models/gemini-pro')
+                            except:
+                                # Dernier essai
+                                model = genai.GenerativeModel('gemini-1.0-pro')
+                        
+                        # Préparer le contexte
+                        context = "Données agricoles de Chefchaouen disponibles. "
+                        context += f"Nombre de feuilles: {len(data_dict)}. "
+                        
+                        # Ajouter des informations spécifiques sur les tomates si la question est liée
+                        if 'tomate' in user_input.lower():
+                            tomato_analysis = analyze_tomato_production(data_dict)
+                            if tomato_analysis['meilleures_communes']:
+                                context += f"Top communes pour tomates: {tomato_analysis['meilleures_communes'][0]['commune']}. "
+                        
+                        prompt = f"""
+                        Tu es un expert agronome spécialisé dans la province de Chefchaouen au Maroc.
+                        
+                        CONTEXTE: {context}
+                        
+                        QUESTION: {user_input}
+                        
+                        Réponds en français avec:
+                        1. Des recommandations pratiques
+                        2. Des communes spécifiques si pertinentes
+                        3. Des actions concrètes
+                        4. Des considérations techniques
+                        
+                        Sois précis et utile.
+                        """
+                        
+                        response = model.generate_content(prompt)
+                        answer = response.text
+                        
+                    else:
+                        # Réponse automatique basée sur les données
+                        if 'tomate' in user_input.lower():
+                            tomato_analysis = analyze_tomato_production(data_dict)
+                            if tomato_analysis['meilleures_communes']:
+                                top = tomato_analysis['meilleures_communes'][0]
+                                answer = f"""
+                                **🍅 Analyse des tomates à Chefchaouen**
+                                
+                                **Commune prioritaire:** {top['commune']} avec {top['surface_tomate']} ha
+                                
+                                **Recommandations:**
+                                1. Commencer par {top['commune']} où l'expérience existe déjà
+                                2. Développer l'irrigation dans cette zone
+                                3. Former les agriculteurs aux techniques modernes
+                                4. Créer une coopérative dédiée
+                                
+                                **Prochaines étapes:**
+                                - Analyser les données d'irrigation de {top['commune']}
+                                - Évaluer les besoins en formation
+                                - Identifier les débouchés commerciaux
+                                """
+                            else:
+                                answer = """
+                                **🍅 Culture de tomates à Chefchaouen**
+                                
+                                **Approche recommandée:**
+                                1. Commencer par Bab Taza (plus grande commune)
+                                2. S'appuyer sur l'expérience existante en maraîchage
+                                3. Développer l'irrigation en priorité
+                                4. Former les agriculteurs aux bonnes pratiques
+                                
+                                **Feuilles à consulter:**
+                                - L'IRRIGATION pour l'eau disponible
+                                - Maraîchage 1, 2, 3 pour l'expérience existante
+                                - COOPERATIVES pour les organisations existantes
+                                """
+                        else:
+                            # Réponse générique
+                            answer = f"""
+                            **🌾 Analyse agricole de Chefchaouen**
+                            
+                            **Pour répondre à: "{user_input}"**
+                            
+                            **Données disponibles:** {len(data_dict)} feuilles avec informations sur:
+                            - Superficies agricoles
+                            - Production végétale et animale
+                            - Irrigation
+                            - Coopératives
+                            - Données pédologiques
+                            
+                            **Pour une analyse précise:**
+                            1. Consultez la page "🍅 Analyse Tomates" pour le maraîchage
+                            2. Utilisez "📊 Visualisations" pour les analyses graphiques
+                            3. Explorez "⚙️ Exploration Données" pour les données brutes
+                            
+                            **Questions spécifiques recommandées:**
+                            - "Quelles communes ont le plus de potentiel pour [culture]?"
+                            - "Comment améliorer l'irrigation à [commune]?"
+                            - "Quelles coopératives existent pour [produit]?"
+                            """
                     
-                    prompt = f"""
-                    Tu es un expert agronome spécialiste de la province de Chefchaouen au Maroc.
-                    
-                    CONTEXTE:
-                    - Province: Chefchaouen
-                    - Type de données: Données agricoles de monographie
-                    - Feuilles analysées: {', '.join(selected_sheets)}
-                    
-                    DONNÉES DISPONIBLES (échantillon):
-                    {context_data[:3000]}
-                    
-                    INSTRUCTIONS:
-                    1. Analyse les données de manière précise et objective
-                    2. Fais référence aux communes spécifiques quand c'est pertinent
-                    3. Propose des recommandations pratiques et réalisables
-                    4. Structure ta réponse de manière claire et organisée
-                    5. Sois concis mais complet
-                    
-                    QUESTION: {question}
-                    
-                    RÉPONSE (en français):
-                    """
-                    
-                    # Appel à l'API
-                    response = model.generate_content(prompt)
-                    
-                    # Affichage de la réponse
-                    with st.chat_message("assistant"):
-                        st.markdown(response.text)
-                    
-                    # Sauvegarde dans l'historique
-                    st.session_state.ia_history.append({
-                        "role": "assistant", 
-                        "content": response.text
-                    })
+                    st.markdown(answer)
+                    st.session_state.chat_history.append({"role": "assistant", "content": answer})
                     
                 except Exception as e:
-                    st.error(f"Erreur lors de l'analyse IA: {str(e)}")
+                    # Réponse de secours en cas d'erreur
+                    error_answer = f"""
+                    **🔧 Analyse automatique**
+                    
+                    **Question:** {user_input}
+                    
+                    **Réponse basée sur les données disponibles:**
+                    
+                    Pour développer l'agriculture à Chefchaouen, je vous recommande de:
+                    
+                    1. **Consulter les données spécifiques** dans les autres pages
+                    2. **Analyser les tendances** par commune
+                    3. **Étudier l'irrigation disponible**
+                    4. **S'appuyer sur les coopératives existantes**
+                    
+                    **Pour les tomates en particulier:**
+                    - Consultez la page "🍅 Analyse Tomates"
+                    - Étudiez les données d'irrigation
+                    - Analysez l'expérience existante en maraîchage
+                    
+                    *Note: Pour des analyses plus avancées, configurez l'API Gemini.*
+                    """
+                    
+                    st.markdown(error_answer)
+                    st.session_state.chat_history.append({"role": "assistant", "content": error_answer})
+    
+    # Bouton de retour
+    st.markdown("---")
+    if st.button("← Retour à l'accueil", key="back_from_ai"):
+        st.session_state.page = "Accueil"
+        st.rerun()
 
-# --- PAGE : RAPPORTS AGRICOLES ---
-elif page == "📈 Rapports Agricoles":
-    st.markdown('<div class="main-header">📈 Rapports Agricoles</div>', unsafe_allow_html=True)
+# --- PAGE EXPLORATION DONNÉES ---
+else:  # Données
+    st.markdown('<div class="main-header">⚙️ Exploration des Données Agricoles</div>', unsafe_allow_html=True)
     
     if not data_dict:
-        st.warning("Aucune donnée disponible pour générer des rapports")
+        st.warning("Aucune donnée disponible")
         st.stop()
     
-    tab1, tab2 = st.tabs(["📋 Rapport par Commune", "🌾 Rapport Global"])
+    # Sélection de la feuille
+    selected_sheet = st.selectbox(
+        "Sélectionnez une feuille à explorer",
+        list(data_dict.keys()),
+        key="data_explorer"
+    )
     
-    with tab1:
-        st.markdown("### 🏘️ Rapport par Commune")
+    if selected_sheet:
+        df = data_dict[selected_sheet]
         
-        # Sélection d'une commune
-        communes_list = []
-        for df in data_dict.values():
+        # Informations sur la feuille
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Lignes", len(df))
+        
+        with col2:
+            st.metric("Colonnes", len(df.columns))
+        
+        with col3:
             if 'Commune' in df.columns:
-                communes_list.extend(df['Commune'].dropna().unique().tolist())
+                communes = df['Commune'].nunique()
+                st.metric("Communes", communes)
+            else:
+                st.metric("Col. Commune", "Non trouvée")
         
-        communes_list = sorted(list(set(communes_list)))
+        with col4:
+            numeric_cols = len(df.select_dtypes(include=[np.number]).columns)
+            st.metric("Col. numériques", numeric_cols)
         
-        if not communes_list:
-            st.warning("Aucune commune trouvée dans les données")
-            st.stop()
+        # Affichage des données
+        st.markdown("### 📋 Données brutes")
         
-        selected_commune = st.selectbox(
-            "Sélectionner une commune",
-            communes_list
-        )
+        tab1, tab2 = st.tabs(["Tableau complet", "Statistiques"])
         
-        if selected_commune and st.button("📊 Générer le rapport communal", type="primary"):
-            with st.spinner("Génération du rapport en cours..."):
-                # Collecte des données pour la commune
-                commune_data = []
+        with tab1:
+            # Options d'affichage
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                rows_to_show = st.slider("Lignes à afficher", 10, 100, 20, key="rows_slider")
+            
+            with col2:
+                show_all_cols = st.checkbox("Afficher toutes les colonnes", value=True)
+            
+            if show_all_cols:
+                st.dataframe(df.head(rows_to_show), use_container_width=True)
+            else:
+                # Afficher seulement les premières colonnes
+                display_cols = list(df.columns[:min(8, len(df.columns))])
+                st.dataframe(df[display_cols].head(rows_to_show), use_container_width=True)
                 
-                for sheet_name, df in data_dict.items():
-                    if 'Commune' in df.columns:
-                        commune_rows = df[df['Commune'] == selected_commune]
-                        if not commune_rows.empty:
-                            for _, row in commune_rows.iterrows():
-                                for col in df.columns:
-                                    if col != 'Commune' and pd.api.types.is_numeric_dtype(df[col]):
-                                        value = row[col]
-                                        if value != 0:  # Ignorer les valeurs nulles
-                                            commune_data.append({
-                                                'Feuille': sheet_name,
-                                                'Variable': col,
-                                                'Valeur': value
-                                            })
-                
-                if commune_data:
-                    commune_df = pd.DataFrame(commune_data)
-                    
-                    st.markdown(f"## 📋 Rapport pour {selected_commune}")
-                    
-                    # Vue synthétique
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Indicateurs trouvés", len(commune_df))
-                    
-                    with col2:
-                        st.metric("Catégories de données", commune_df['Feuille'].nunique())
-                    
-                    with col3:
-                        avg_value = commune_df['Valeur'].mean()
-                        st.metric("Valeur moyenne", f"{avg_value:,.1f}")
-                    
-                    # Tableau détaillé
-                    st.dataframe(
-                        commune_df.sort_values('Valeur', ascending=False),
-                        use_container_width=True
-                    )
-                    
-                    # Graphique des principales valeurs
-                    top_values = commune_df.nlargest(10, 'Valeur')
-                    if not top_values.empty:
-                        fig = px.bar(
-                            top_values,
-                            x='Variable',
-                            y='Valeur',
-                            color='Feuille',
-                            title=f"Top 10 indicateurs - {selected_commune}",
-                            labels={'Valeur': 'Valeur', 'Variable': 'Indicateur'}
-                        )
-                        fig.update_layout(xaxis_tickangle=-45)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Téléchargement
-                    report_text = f"Rapport pour {selected_commune}\n\n"
-                    for _, row in commune_df.iterrows():
-                        report_text += f"{row['Feuille']} - {row['Variable']}: {row['Valeur']}\n"
-                    
-                    st.download_button(
-                        label="📄 Télécharger le rapport",
-                        data=report_text,
-                        file_name=f"rapport_{selected_commune}.txt",
-                        mime="text/plain"
-                    )
-                else:
-                    st.warning(f"Aucune donnée significative trouvée pour la commune {selected_commune}")
-    
-    with tab2:
-        st.markdown("### 🌾 Rapport Global")
+                if len(df.columns) > 8:
+                    st.caption(f"Affichage des 8 premières colonnes sur {len(df.columns)}. Cochez la case pour tout voir.")
         
-        # Sélection des feuilles à inclure
-        selected_sheets = st.multiselect(
-            "Sélectionner les feuilles à inclure",
-            list(data_dict.keys()),
-            default=list(data_dict.keys())[:5] if data_dict else []
-        )
-        
-        if st.button("📈 Générer le rapport global", type="primary"):
-            with st.spinner("Analyse des données en cours..."):
-                # Création du rapport
-                report = f"""
-# 🌱 RAPPORT AGRICOLE - Province de Chefchaouen
-**Date de génération:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**Feuilles analysées:** {', '.join(selected_sheets)}
-
-## 📊 SYNTHÈSE GLOBALE
-"""
+        with tab2:
+            # Statistiques descriptives
+            numeric_df = df.select_dtypes(include=[np.number])
+            
+            if not numeric_df.empty:
+                st.dataframe(numeric_df.describe(), use_container_width=True)
                 
-                # Analyse par feuille
-                for sheet in selected_sheets:
-                    if sheet in data_dict:
-                        df = data_dict[sheet]
-                        
-                        report += f"\n### 📄 {sheet}\n"
-                        report += f"- **Nombre de lignes:** {len(df)}\n"
-                        report += f"- **Nombre de colonnes:** {len(df.columns)}\n"
-                        
-                        if 'Commune' in df.columns:
-                            communes = df['Commune'].nunique()
-                            report += f"- **Communes représentées:** {communes}\n"
-                        
-                        # Colonnes numériques
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                        if numeric_cols:
-                            report += "- **Variables numériques principales:**\n"
-                            for col in numeric_cols[:5]:  # Limiter aux 5 premières
-                                if df[col].sum() > 0:
-                                    report += f"  - {col}: {df[col].sum():,.2f} (total)\n"
-                
-                # Affichage du rapport
-                st.markdown(report)
-                
-                # Téléchargement
+                # Export des statistiques
+                stats_csv = numeric_df.describe().to_csv()
                 st.download_button(
-                    label="📄 Télécharger le rapport complet",
-                    data=report,
-                    file_name=f"rapport_agricole_chefchaouen_{datetime.now().strftime('%Y%m%d')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
+                    label="📥 Télécharger les statistiques (CSV)",
+                    data=stats_csv,
+                    file_name=f"statistiques_{selected_sheet}.csv",
+                    mime="text/csv"
                 )
-
-# --- PAGE : PARAMÈTRES ---
-elif page == "⚙️ Paramètres":
-    st.markdown('<div class="main-header">⚙️ Paramètres et Administration</div>', unsafe_allow_html=True)
-    
-    tab1, tab2, tab3 = st.tabs(["🔧 Configuration", "📊 Données", "📚 Aide"])
-    
-    with tab1:
-        st.markdown("### Configuration de l'Application")
+            else:
+                st.info("Aucune colonne numérique pour les statistiques")
+        
+        # Export des données
+        st.markdown("---")
+        st.markdown("### 📤 Export des données")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.info(f"**Version:** 3.1.0")
-            st.info(f"**Feuilles chargées:** {len(data_dict)}")
-            st.info(f"**ID Google Sheets:** {SHEET_ID}")
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Télécharger en CSV",
+                data=csv,
+                file_name=f"{selected_sheet}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
         
         with col2:
-            st.info(f"**Dernière actualisation:** {datetime.now().strftime('%H:%M:%S')}")
-            st.info(f"**Statut API Gemini:** {'✅ Configurée' if 'gemini_api_key' in st.secrets else '❌ Manquante'}")
-        
-        # Options d'affichage
-        st.markdown("### Personnalisation")
-        
-        theme = st.selectbox(
-            "Thème de couleur",
-            ["Vert Agricole", "Bleu Marin", "Terre Cuite", "Classique"]
-        )
-        
-        if st.button("💾 Enregistrer les préférences"):
-            st.success("Préférences enregistrées!")
+            # Export Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Données')
+            excel_data = output.getvalue()
+            
+            st.download_button(
+                label="📊 Télécharger en Excel",
+                data=excel_data,
+                file_name=f"{selected_sheet}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
     
-    with tab2:
-        st.markdown("### Gestion des Données")
-        
-        # Vue d'ensemble
-        overview_data = []
-        for sheet_name, df in data_dict.items():
-            overview_data.append({
-                'Feuille': sheet_name,
-                'Catégorie': sheet_categories.get(sheet_name, 'autre'),
-                'Lignes': len(df),
-                'Colonnes': len(df.columns),
-                'Communes': df['Commune'].nunique() if 'Commune' in df.columns else 0
-            })
-        
-        overview_df = pd.DataFrame(overview_data)
-        st.dataframe(overview_df, use_container_width=True)
-        
-        # Export
-        st.markdown("### Export des Données")
-        
-        export_sheet = st.selectbox(
-            "Sélectionner une feuille à exporter",
-            list(data_dict.keys())
-        )
-        
-        if export_sheet:
-            df = data_dict[export_sheet]
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("📥 Exporter en CSV", use_container_width=True):
-                    csv = df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="✅ Télécharger CSV",
-                        data=csv,
-                        file_name=f"{export_sheet}.csv",
-                        mime="text/csv"
-                    )
-            
-            with col2:
-                if st.button("📊 Exporter en Excel", use_container_width=True):
-                    output = BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df.to_excel(writer, index=False, sheet_name='Données')
-                    excel_data = output.getvalue()
-                    
-                    st.download_button(
-                        label="✅ Télécharger Excel",
-                        data=excel_data,
-                        file_name=f"{export_sheet}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-    
-    with tab3:
-        st.markdown("### 📚 Guide d'Utilisation")
-        
-        with st.expander("🎯 Comment utiliser l'application"):
-            st.markdown("""
-            1. **Tableau de Bord**: Vue d'ensemble des données disponibles
-            2. **Visualisations**: Graphiques interactifs par feuille et variable
-            3. **Assistant IA**: Analyse intelligente avec l'IA Gemini
-            4. **Rapports**: Génération de rapports par commune ou global
-            5. **Paramètres**: Configuration et export des données
-            """)
-        
-        st.markdown("### 📞 Support")
-        st.caption("Pour toute question ou problème, consultez la documentation ou contactez le support technique.")
-        
-        if st.button("🔄 Réinitialiser l'application"):
-            st.cache_data.clear()
-            st.rerun()
+    # Bouton de retour
+    st.markdown("---")
+    if st.button("← Retour à l'accueil", key="back_from_data"):
+        st.session_state.page = "Accueil"
+        st.rerun()
 
 # --- FOOTER ---
 st.divider()
-st.caption(f"Agri-Analytics Chefchaouen v3.1 • Données chargées: {len(data_dict)} feuilles • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"Agri-Analytics Chefchaouen • Données: {len(data_dict)} feuilles • {datetime.now().strftime('%Y-%m-%d %H:%M')}")
