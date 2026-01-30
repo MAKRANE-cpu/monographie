@@ -4,6 +4,4 @@ plotly
 gspread
 google-auth
 google-generativeai
-langchain
-langchain-community
-langchain-experimental
+statsmodels
