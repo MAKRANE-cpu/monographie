@@ -11,12 +11,12 @@ st.set_page_config(page_title="Agri-Chefchaouen Dashboard", page_icon="🌿", la
 
 # --- 2. FONCTION DE NETTOYAGE ULTRA-ROBUSTE ---
 def clean_val(val):
-    """Transforme n'importe quelle cellule en nombre propre"""
+    """Transforme n'importe quelle cellule en nombre flottant propre"""
     if val is None or val == "":
         return 0.0
-    # Nettoyage : point à la place de virgule, suppression des espaces
+    # Nettoyage : point à la place de virgule, suppression des espaces et caractères spéciaux
     s = str(val).strip().replace(' ', '').replace('\xa0', '').replace(',', '.')
-    # On extrait uniquement les chiffres et le point décimal
+    # Extraction du premier nombre trouvé (ex: "12.5 qx" -> 12.5)
     match = re.search(r"[-+]?\d*\.\d+|\d+", s)
     if match:
         try:
@@ -40,21 +40,20 @@ def load_and_fix_data(sheet_id):
         
         df_raw = pd.DataFrame(rows)
         
-        # --- RÉPARATION DE L'ERREUR 'AMBIGUOUS' ---
-        header_idx = 0
-        found_header = False
+        # --- RÉSOLUTION DE L'ERREUR AMBIGUOUS ---
+        # On cherche l'index de la ligne qui contient le mot "Commune"
+        header_idx = None
         for i, row in df_raw.iterrows():
-            # Correction : on teste chaque cellule individuellement
-            # On utilise une compréhension de liste avec any() pour éviter l'ambiguïté
-            if any("commune" in str(v).lower() for v in row.values):
+            # Utilisation de toute la ligne convertie en chaîne pour une recherche globale sécurisée
+            line_content = " ".join([str(v).lower() for v in row.values])
+            if "commune" in line_content:
                 header_idx = i
-                found_header = True
                 break
         
-        if not found_header:
+        if header_idx is None:
             continue
 
-        # Reconstruction des noms de colonnes (Gestion des cellules fusionnées)
+        # Reconstruction des noms de colonnes (Gestion des cellules fusionnées sur 2 lignes)
         h1 = df_raw.iloc[header_idx]
         h2 = df_raw.iloc[header_idx + 1] if (header_idx + 1) < len(df_raw) else h1
         
@@ -62,20 +61,23 @@ def load_and_fix_data(sheet_id):
         current_culture = ""
         for c1, c2 in zip(h1, h2):
             c1, c2 = str(c1).strip(), str(c2).strip()
+            # Si le titre principal change, on le mémorise
             if c1 != "" and "unnamed" not in c1.lower():
                 current_culture = c1
             
+            # Construction du nom de colonne final
             if "commune" in c1.lower() or "commune" in c2.lower():
                 new_cols.append("Commune")
             elif c2 != "" and current_culture != "":
                 new_cols.append(f"{current_culture}_{c2}")
             else:
-                new_cols.append(current_culture if current_culture else "Info")
+                new_cols.append(current_culture if current_culture else f"Col_{len(new_cols)}")
         
+        # On récupère les données sous l'en-tête (on saute 2 lignes si unité existe)
         df = df_raw.iloc[header_idx+2:].copy()
         df.columns = new_cols
         
-        # Nettoyage des chiffres colonne par colonne
+        # Nettoyage des chiffres colonne par colonne (évite les erreurs sur les types mixtes)
         for col in df.columns:
             if "Commune" not in col:
                 df[col] = df[col].apply(clean_val)
@@ -83,59 +85,65 @@ def load_and_fix_data(sheet_id):
         all_data[ws.title] = df.reset_index(drop=True)
     return all_data
 
-# --- 3. CHARGEMENT ET NAVIGATION ---
+# --- 3. LOGIQUE DE NAVIGATION ---
 SHEET_ID = "1fVb91z5B-nqOwCCPO5rMK-u9wd2KxDG56FteMaCr63w"
 
 try:
     data_dict = load_and_fix_data(SHEET_ID)
 except Exception as e:
     st.error(f"Erreur technique lors du chargement : {e}")
+    st.info("Détails : Cette erreur survient souvent si la structure de l'onglet ne contient pas le mot 'Commune'.")
     st.stop()
 
+# Barre latérale
 with st.sidebar:
     st.title("🌿 Agri-Chefchaouen")
     page = st.radio("Menu", ["📊 Dashboard", "🤖 Expert IA", "📂 Données Brutes"])
-    if st.button("🔄 Actualiser"):
+    if st.button("🔄 Actualiser les données"):
         st.cache_data.clear()
         st.rerun()
 
 # --- 4. PAGES ---
+
 if page == "📊 Dashboard":
     st.title("📊 Analyses des Productions")
     onglet = st.selectbox("Choisir une feuille", list(data_dict.keys()))
     df = data_dict[onglet]
     
+    # Sélecteur de données numériques
     num_cols = [c for c in df.columns if c != "Commune"]
+    
     if num_cols:
         target = st.selectbox("Variable à visualiser", num_cols)
         
-        # KPIs simples
+        # KPIs
         c1, c2 = st.columns(2)
-        c1.metric("Total", f"{df[target].sum():,.0f}")
-        c2.metric("Moyenne", f"{df[target].mean():.2f}")
+        c1.metric("Total Province", f"{df[target].sum():,.0f}")
+        c2.metric("Moyenne par Commune", f"{df[target].mean():.2f}")
         
         # Graphique Plotly
         fig = px.bar(df, x="Commune", y=target, color=target, 
-                     color_continuous_scale="Greens", 
-                     title=f"Distribution de {target} par commune")
+                     color_continuous_scale="Greens",
+                     title=f"Répartition de {target} par commune")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("Aucune donnée chiffrée exploitable trouvée ici.")
+        st.warning("Aucune donnée numérique exploitable sur cette feuille.")
 
 elif page == "🤖 Expert IA":
     st.title("🤖 Assistant IA")
+    # Vérification de la clé API dans les secrets
     if "gemini_api_key" in st.secrets:
         genai.configure(api_key=st.secrets["gemini_api_key"])
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = st.chat_input("Ex: Quel est le rendement moyen des céréales ?")
+        prompt = st.chat_input("Ex: Quelle commune a la meilleure production de blé ?")
         if prompt:
-            # On donne un contexte à l'IA avec les premières lignes
-            ctx = data_dict[list(data_dict.keys())[0]].head(5).to_string()
-            response = model.generate_content(f"Données: {ctx}\n\nQuestion: {prompt}")
+            # Envoi d'un mini-contexte pour aider l'IA
+            sheet_info = data_dict[list(data_dict.keys())[0]].head(5).to_string()
+            response = model.generate_content(f"Voici un extrait des données agricoles : \n{sheet_info}\n Question : {prompt}")
             st.write(response.text)
     else:
-        st.error("Clé API absente des secrets.")
+        st.error("Clé API 'gemini_api_key' non configurée.")
 
 elif page == "📂 Données Brutes":
     st.title("📂 Explorateur")
