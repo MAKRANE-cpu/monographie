@@ -1,157 +1,185 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import gspread
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
-# --- 1. CONFIGURATION DE LA PAGE ---
+# --- 1. CONFIGURATION ET STYLE ---
 st.set_page_config(
-    page_title="Agri-Chefchaouen Data", 
-    page_icon="🌿", 
+    page_title="Agri-Dashboard Chefchaouen",
+    page_icon="🌿",
     layout="wide"
 )
 
-# --- 2. FONCTION DE CHARGEMENT ET NETTOYAGE ---
+# Style CSS personnalisé pour un look "Entreprise"
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stMetric { 
+        background-color: #ffffff; 
+        padding: 20px; 
+        border-radius: 12px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid #eef0f2;
+    }
+    div[data-testid="stSidebar"] { background-color: #1e293b; color: white; }
+    .stButton>button { border-radius: 8px; width: 100%; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. FONCTIONS DE CHARGEMENT ---
 @st.cache_data(ttl=600)
-def load_gspread_data(sheet_id):
-    # Authentification
+def load_all_data(sheet_id):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
     client = gspread.authorize(creds)
-    
     sh = client.open_by_key(sheet_id)
-    worksheets = sh.worksheets()
     
-    all_data = {}
-    
-    for ws in worksheets:
-        values = ws.get_all_values()
-        if not values:
-            continue
-            
-        df_raw = pd.DataFrame(values)
-        
-        # --- DÉTECTION DYNAMIQUE DE L'EN-TÊTE ---
-        # On cherche la ligne qui contient "Commune"
-        header_idx = None
+    all_sheets = {}
+    for ws in sh.worksheets():
+        df_raw = pd.DataFrame(ws.get_all_values())
+        if df_raw.empty: continue
+
+        # Détection automatique de l'en-tête
+        header_idx = 0
         for i, row in df_raw.iterrows():
-            if any("commune" in str(v).lower() for v in row.values):
+            if "commune" in str(row.values).lower():
                 header_idx = i
                 break
         
-        if header_idx is not None:
-            # Ligne principale (ex: Culture ou Commune)
-            h_names = df_raw.iloc[header_idx]
-            # Ligne secondaire (ex: Sup / Rdt)
-            h_units = df_raw.iloc[header_idx + 1] if (header_idx + 1) < len(df_raw) else None
-            
-            new_cols = []
-            current_main = ""
-            
-            for idx, col_name in enumerate(h_names):
-                col_name = str(col_name).strip()
-                unit_name = str(h_units[idx]).strip() if h_units is not None else ""
-                
-                # Si la case du haut n'est pas vide, c'est une nouvelle culture
-                if col_name != "" and "unnamed" not in col_name.lower():
-                    current_main = col_name
-                
-                if "commune" in col_name.lower() or "commune" in unit_name.lower():
-                    new_cols.append("Commune")
-                elif unit_name != "" and current_main != "":
-                    # On fusionne Culture + Unité (ex: Fève_Sup)
-                    new_cols.append(f"{current_main}_{unit_name}")
-                elif current_main != "":
-                    new_cols.append(current_main)
-                else:
-                    new_cols.append(f"Col_{idx}")
-
-            df_raw.columns = new_cols
-            # On garde les données après les en-têtes (index + 2)
-            df = df_raw.iloc[header_idx + 2:].reset_index(drop=True)
-        else:
-            # Cas de secours si "Commune" n'est pas trouvé
-            df = df_raw.copy()
-            df.columns = df.iloc[0]
-            df = df[1:].reset_index(drop=True)
-
-        # Nettoyage final
-        df = df.loc[:, ~df.columns.duplicated()] # Supprime colonnes en double
-        all_data[ws.title] = df
+        # Nettoyage des colonnes (fusion des lignes d'en-tête)
+        h1 = df_raw.iloc[header_idx]
+        h2 = df_raw.iloc[header_idx + 1] if (header_idx + 1) < len(df_raw) else h1
         
-    return all_data
+        new_cols = []
+        curr = ""
+        for c1, c2 in zip(h1, h2):
+            c1, c2 = str(c1).strip(), str(c2).strip()
+            if c1 != "": curr = c1
+            col_name = f"{curr}_{c2}" if c2 != "" and c1 != c2 else curr
+            new_cols.append(col_name if col_name != "" else "Info")
 
-# --- 3. LOGIQUE DE LA BARRE LATÉRALE (SIDEBAR) ---
-# Un seul bloc pour éviter les erreurs de duplication d'ID
+        df = df_raw.iloc[header_idx+2:].copy()
+        df.columns = new_cols
+        
+        # Conversion numérique automatique
+        for col in df.columns:
+            if "Commune" not in col:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.replace(r'\s+', '', regex=True), errors='ignore')
+        
+        all_sheets[ws.title] = df.dropna(subset=[df.columns[0]])
+    return all_sheets
+
+# --- 3. LOGIQUE SIDEBAR ---
 SHEET_ID = "1fVb91z5B-nqOwCCPO5rMK-u9wd2KxDG56FteMaCr63w"
 
 with st.sidebar:
-    st.title("🌿 Agri-Chefchaouen")
-    
-    # Bouton de mise à jour forcée
-    if st.button("🔄 Actualiser les données", key="refresh_data"):
-        st.cache_data.clear()
-        st.success("Données synchronisées !")
-        st.rerun()
-    
+    st.image("https://www.svgrepo.com/show/404631/agriculture.svg", width=80)
+    st.title("Agri-Chefchaouen v2")
     st.divider()
     
-    # Navigation principale
-    page = st.radio(
-        "Menu", 
-        ["📊 Tableaux de Bord", "🤖 Expert IA", "📈 Graphiques"],
-        key="nav_radio"
+    menu = st.radio(
+        "Navigation",
+        ["🏠 Tableau de Bord", "📊 Analyses Avancées", "🤖 Expert IA", "📂 Données Brutes"],
+        key="main_nav"
     )
+    
+    st.divider()
+    if st.button("🔄 Forcer la mise à jour"):
+        st.cache_data.clear()
+        st.rerun()
 
-# --- 4. CHARGEMENT INITIAL DES DONNÉES ---
+# Chargement des données
 try:
-    data_dict = load_gspread_data(SHEET_ID)
+    data = load_all_data(SHEET_ID)
 except Exception as e:
-    st.error(f"Impossible de charger Google Sheets : {e}")
+    st.error(f"Erreur de connexion : {e}")
     st.stop()
 
-# --- 5. CONTENU DES PAGES ---
+# --- 4. PAGES ---
 
-if page == "📊 Tableaux de Bord":
-    st.header("Visualisation des données")
+if menu == "🏠 Tableau de Bord":
+    st.title("🏠 Synthèse Provinciale")
     
-    onglet = st.selectbox("Sélectionner une feuille", list(data_dict.keys()), key="select_sheet")
-    df_display = data_dict[onglet].copy()
-    
-    # Tentative de conversion numérique pour les calculs/affichage
-    for col in df_display.columns:
-        if col != "Commune":
-            df_display[col] = pd.to_numeric(
-                df_display[col].astype(str).str.replace(',', '.').str.replace(r'\s+', '', regex=True), 
-                errors='ignore'
-            )
-    
-    st.dataframe(df_display, use_container_width=True)
+    # KPIs en haut
+    col1, col2, col3, col4 = st.columns(4)
+    if "PRODUCTION VEGETALE Céréales" in data:
+        df_c = data["PRODUCTION VEGETALE Céréales"]
+        col1.metric("Surface Totale Blé (Ha)", f"{df_c['BD_Sup'].sum():,.0f}")
+        col2.metric("Rendement Moyen", f"{df_c['BD_Rdt'].mean():.1f} qx/ha")
+        col3.metric("Communes Actives", len(df_c))
+        col4.metric("Status Campagne", "En cours", delta="Optimiste")
 
-elif page == "🤖 Expert IA":
-    st.header("Assistant Intelligent")
-    # Configuration Gemini (remplacez par votre clé)
-    genai.configure(api_key=st.secrets["gemini_api_key"])
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    st.markdown("---")
     
-    user_query = st.text_input("Posez votre question sur l'agriculture à Chefchaouen :")
-    if user_query:
-        # On prépare un petit contexte avec les premières lignes de la feuille active
-        context = data_dict[list(data_dict.keys())[0]].head(10).to_string()
-        response = model.generate_content(f"Contexte : {context}\n\nQuestion : {user_query}")
-        st.markdown(response.text)
+    # Graphique interactif principal
+    st.subheader("📊 Comparaison des Rendements par Commune")
+    sheet_sel = st.selectbox("Choisir une catégorie", list(data.keys()))
+    df_sel = data[sheet_sel]
+    
+    # On cherche les colonnes de rendement (Rdt)
+    rdt_cols = [c for c in df_sel.columns if "Rdt" in c]
+    if rdt_cols:
+        target_rdt = st.selectbox("Culture", rdt_cols)
+        fig = px.bar(df_sel, x="Commune", y=target_rdt, color=target_rdt,
+                     color_continuous_scale="Greens", template="plotly_white")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Pas de données de rendement sur cette feuille.")
 
-elif page == "📈 Graphiques":
-    st.header("Analyses Graphiques")
-    # Exemple avec la première feuille
-    sheet_name = list(data_dict.keys())[0]
-    df_graph = data_dict[sheet_name].copy()
+elif menu == "📊 Analyses Avancées":
+    st.title("📊 Corrélation et Distribution")
     
-    # Nettoyage rapide pour graphique
-    col_x = "Commune"
-    col_y = st.selectbox("Choisir une colonne pour le graphique", [c for c in df_graph.columns if c != "Commune"])
+    sheet_name = st.selectbox("Source de données", list(data.keys()), key="adv_sheet")
+    df = data[sheet_name]
     
-    if col_y:
-        df_graph[col_y] = pd.to_numeric(df_graph[col_y].astype(str).str.replace(',', '.'), errors='coerce')
-        fig = st.bar_chart(df_graph, x=col_x, y=col_y)
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.subheader("📈 Courbe de tendance")
+        cols_num = df.select_dtypes(include=['number']).columns
+        x_axis = st.selectbox("Axe X", df.columns, index=0)
+        y_axis = st.selectbox("Axe Y", cols_num)
+        fig_scat = px.scatter(df, x=x_axis, y=y_axis, size=y_axis, color="Commune", hover_name="Commune", trendline="ols")
+        st.plotly_chart(fig_scat, use_container_width=True)
+
+    with c2:
+        st.subheader("🥧 Répartition Partielle")
+        fig_pie = px.pie(df.head(10), values=y_axis, names="Commune", hole=0.4)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+elif menu == "🤖 Expert IA":
+    st.title("🤖 Assistant IA Décisionnel")
+    st.markdown("Posez vos questions sur les tendances agricoles de la province.")
+
+    if "gemini_api_key" not in st.secrets:
+        st.warning("Veuillez ajouter 'gemini_api_key' dans les secrets.")
+    else:
+        genai.configure(api_key=st.secrets["gemini_api_key"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        for m in st.session_state.messages:
+            with st.chat_message(m["role"]): st.markdown(m["content"])
+
+        if prompt := st.chat_input("Ex: Quelle commune a le meilleur rendement en Olivier ?"):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"): st.markdown(prompt)
+
+            # Envoi d'un mini-contexte pour aider l'IA
+            context = f"Données de la feuille sélectionnée: {data[list(data.keys())[0]].head(10).to_string()}"
+            
+            with st.chat_message("assistant"):
+                with st.spinner("Analyse en cours..."):
+                    response = model.generate_content(f"{context}\n\nQuestion: {prompt}")
+                    st.markdown(response.text)
+                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+
+elif menu == "📂 Données Brutes":
+    st.title("📂 Explorateur de Fichiers")
+    sel = st.selectbox("Sélectionner la table", list(data.keys()))
+    st.dataframe(data[sel], use_container_width=True)
